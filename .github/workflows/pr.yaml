@@ -1,4 +1,5 @@
 name: PR
+# Test: verify PR workflow triggers correctly.
 
 on:
   pull_request:
