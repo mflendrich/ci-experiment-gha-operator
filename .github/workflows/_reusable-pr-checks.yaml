@@ -7,28 +7,23 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
       - run: make build
 
   test-unit:
     name: Unit Tests
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
       - run: make test-unit
 
   test-binary:
     name: Binary Test
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,70 +32,41 @@ jobs:
           # actions/checkout provides by default (fetch-depth: 1 still checks
           # out the merge commit with the correct SHA).
           fetch-depth: 1
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
       - run: make test-binary
 
   test-envtest:
     name: Envtest
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Install ginkgo
-        run: go install ./vendor/github.com/onsi/ginkgo/v2/ginkgo
+      # ginkgo is pre-installed in the golang-1.26 image.
       - run: make test-envtest
 
   verify:
     name: Verify
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Install golangci-lint
-        run: |
-          # The .golangci.yaml uses version: "2", requiring golangci-lint v2.x.
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-      - name: Install operator-sdk
-        run: |
-          # verify-bundle requires a patched operator-sdk fork that supports
-          # aggregated ClusterRoles (not yet upstream).
-          # Ref: https://github.com/operator-framework/operator-sdk/pull/6978
-          tmp_dir="$(mktemp -d)"
-          git clone --depth=1 --branch support-aggregated-clusterroles \
-            https://github.com/zimnx/operator-sdk.git "${tmp_dir}/operator-sdk"
-          cd "${tmp_dir}/operator-sdk"
-          make build
-          sudo mv ./build/operator-sdk /usr/local/bin/operator-sdk
-          rm -rf "${tmp_dir}"
+      # golangci-lint, helm, and operator-sdk (custom fork with aggregated
+      # ClusterRole support) are all pre-installed in the golang-1.26 image.
       - run: make verify
 
   verify-deps:
     name: Verify Dependencies
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
       - run: make verify-deps
 
   verify-commits:
     name: Verify Commits
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     # Only runs on pull requests (needs a base ref to compare against).
     if: github.event_name == 'pull_request'
     steps:
@@ -114,6 +80,7 @@ jobs:
   helm-build:
     name: Helm Build
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
         with:
@@ -121,17 +88,13 @@ jobs:
           # HELM_CHART_VERSION.
           fetch-depth: 0
           fetch-tags: true
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Install Helm
-        uses: azure/setup-helm@v4
+      # helm is pre-installed in the golang-1.26 image.
       - run: make helm-build
 
   build-docs:
     name: Build Docs
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:uv-0.10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,14 +102,7 @@ jobs:
           # Sphinx extension (runs `git tag --list`) and sphinx-last-updated-by-git.
           fetch-depth: 0
           fetch-tags: true
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: ">=0.10.9,<0.11.0"
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # uv, python, and git are pre-installed in the uv-0.10 image.
       - name: Build docs
         working-directory: docs
         run: |
@@ -157,22 +113,19 @@ jobs:
   verify-docs:
     name: Verify Docs
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:uv-0.10
     steps:
       - uses: actions/checkout@v4
         with:
           # Tags are needed by the version_context_substitutions Sphinx extension.
           fetch-depth: 0
           fetch-tags: true
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: ">=0.10.9,<0.11.0"
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # uv, python, and git are pre-installed in the uv-0.10 image.
       - name: Verify docs
         working-directory: docs
         run: |
           make setup
-          make verify
+          make verify-uv
+      - name: Linkcheck
+        working-directory: docs
+        run: make linkcheck

@@ -12,6 +12,7 @@ jobs:
   helm-build:
     name: Build Helm Charts
     runs-on: ubuntu-latest
+    container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,13 +21,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
+      # Go and Helm are pre-installed in the golang-1.26 image.
 
       - name: Build Helm charts
         run: |
