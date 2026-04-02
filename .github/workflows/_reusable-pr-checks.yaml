@@ -70,7 +70,10 @@ jobs:
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
       # golangci-lint, helm, and operator-sdk (custom fork with aggregated
       # ClusterRole support) are all pre-installed in the golang-1.26 image.
-      - run: make verify
+      # stdin must be closed because operator-sdk's generate-bundle sub-command
+      # detects a non-terminal stdin as "piped input" and rejects --deploy-dir.
+      # Prow avoids this because K8s containers have no stdin by default.
+      - run: make verify </dev/null
 
   verify-deps:
     name: Verify Dependencies
