@@ -1,0 +1,35 @@
+name: Reusable Post-Merge Helm
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Image tag / app version (e.g., 'latest', '1.19', '1.20')."
+        type: string
+        required: true
+
+jobs:
+  helm-build:
+    name: Build Helm Charts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Build Helm charts
+        run: |
+          make helm-build HELM_APP_VERSION='${{ inputs.image_tag }}'
+
+      - name: Upload Helm charts
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-charts-${{ inputs.image_tag }}
+          path: helm/build/
+          if-no-files-found: error

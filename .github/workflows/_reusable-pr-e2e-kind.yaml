@@ -1,0 +1,35 @@
+name: Reusable PR E2E KinD
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Operator image reference to test.
+        type: string
+        required: true
+
+jobs:
+  e2e-kind:
+    name: E2E KinD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install KinD
+        run: |
+          # Install the latest KinD release.
+          go install sigs.k8s.io/kind@latest
+
+      - name: Run KinD E2E tests
+        env:
+          SO_IMAGE: ${{ inputs.image }}
+        run: |
+          make test-e2e-kind

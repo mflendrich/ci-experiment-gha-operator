@@ -1,0 +1,100 @@
+name: Reusable Post-Merge Images
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Image tag to use (e.g., 'latest', '1.19', '1.20')."
+        type: string
+        required: true
+      registry:
+        description: Container registry to push images to.
+        type: string
+        default: quay.io/scylladb-dev/ci-gha
+    secrets:
+      QUAY_USERNAME:
+        required: true
+      QUAY_PASSWORD:
+        required: true
+
+jobs:
+  build-and-push:
+    name: Build and Push Multi-Arch Images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image references
+        id: meta
+        run: |
+          repo_ref="${{ inputs.registry }}:scylla-operator-${{ inputs.image_tag }}"
+          git_revision="${{ github.sha }}"
+          echo "repo_ref=${repo_ref}" >> "${GITHUB_OUTPUT}"
+          echo "git_revision=${git_revision}" >> "${GITHUB_OUTPUT}"
+          echo "image_amd64=${repo_ref}-${git_revision}-amd64" >> "${GITHUB_OUTPUT}"
+          echo "image_arm64=${repo_ref}-${git_revision}-arm64" >> "${GITHUB_OUTPUT}"
+
+      - name: Install qemu-user-static
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static
+
+      - name: Log in to Quay.io
+        run: |
+          buildah login \
+            --username '${{ secrets.QUAY_USERNAME }}' \
+            --password '${{ secrets.QUAY_PASSWORD }}' \
+            quay.io
+
+      - name: Build amd64 image
+        run: |
+          buildah build \
+            --format=docker \
+            --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=${{ steps.meta.outputs.git_revision }}" \
+            --tag '${{ steps.meta.outputs.image_amd64 }}' \
+            .
+
+      - name: Push amd64 image
+        run: |
+          buildah push '${{ steps.meta.outputs.image_amd64 }}'
+
+      - name: Build arm64 image
+        run: |
+          buildah build \
+            --format=docker \
+            --platform linux/arm64 \
+            --label "org.opencontainers.image.revision=${{ steps.meta.outputs.git_revision }}" \
+            --tag '${{ steps.meta.outputs.image_arm64 }}' \
+            .
+
+      - name: Push arm64 image
+        run: |
+          buildah push '${{ steps.meta.outputs.image_arm64 }}'
+
+      - name: Create and push multi-arch manifest
+        run: |
+          set -euExo pipefail
+
+          repo_ref='${{ steps.meta.outputs.repo_ref }}'
+          git_revision='${{ steps.meta.outputs.git_revision }}'
+
+          # Rolling tag (e.g., scylla-operator-latest).
+          buildah manifest create \
+            --annotation "org.opencontainers.image.revision=${git_revision}" \
+            "${repo_ref}"
+
+          buildah manifest add "${repo_ref}" '${{ steps.meta.outputs.image_amd64 }}'
+          buildah manifest add "${repo_ref}" '${{ steps.meta.outputs.image_arm64 }}'
+
+          digestfile="$( mktemp )"
+          buildah manifest push --all --digestfile="${digestfile}" "${repo_ref}" "docker://${repo_ref}"
+          echo "Pushed rolling manifest: ${repo_ref}"
+          cat "${digestfile}"
+          echo
+
+          # Pinned tag (e.g., scylla-operator-latest-<sha>).
+          buildah manifest push --all --digestfile="${digestfile}" "${repo_ref}" "docker://${repo_ref}-${git_revision}"
+          echo "Pushed pinned manifest: ${repo_ref}-${git_revision}"
+          cat "${digestfile}"
+          echo

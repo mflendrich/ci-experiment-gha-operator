@@ -1,0 +1,54 @@
+name: Reusable PR Images
+
+on:
+  workflow_call:
+    inputs:
+      registry:
+        description: Container registry to push images to.
+        type: string
+        default: quay.io/scylladb-dev/ci-gha
+    secrets:
+      QUAY_USERNAME:
+        required: true
+      QUAY_PASSWORD:
+        required: true
+    outputs:
+      image:
+        description: The full image reference that was pushed.
+        value: ${{ jobs.build-and-push.outputs.image }}
+
+jobs:
+  build-and-push:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image reference
+        id: meta
+        run: |
+          image="${{ inputs.registry }}:scylla-operator-pr-${{ github.event.pull_request.head.sha }}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to Quay.io
+        run: |
+          buildah login \
+            --username '${{ secrets.QUAY_USERNAME }}' \
+            --password '${{ secrets.QUAY_PASSWORD }}' \
+            quay.io
+
+      - name: Build image
+        run: |
+          buildah build \
+            --format=docker \
+            --platform linux/amd64 \
+            --manifest '${{ steps.meta.outputs.image }}' \
+            .
+
+      - name: Push image
+        run: |
+          buildah manifest push --all \
+            '${{ steps.meta.outputs.image }}' \
+            'docker://${{ steps.meta.outputs.image }}'

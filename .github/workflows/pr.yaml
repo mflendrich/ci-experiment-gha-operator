@@ -1,0 +1,54 @@
+name: PR
+
+on:
+  pull_request:
+    branches:
+      - master
+      - v1.19
+      - v1.20
+
+jobs:
+  # Detect which files changed to conditionally skip expensive jobs.
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!.github/**'
+              - '!enhancements/**'
+              - '!**/*.md'
+              - '!renovate.json'
+            docs:
+              - 'docs/**'
+
+  pr-checks:
+    name: Checks
+    needs: []
+    uses: ./.github/workflows/_reusable-pr-checks.yaml
+
+  pr-images:
+    name: Images
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/_reusable-pr-images.yaml
+    secrets:
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+  pr-e2e-kind:
+    name: E2E KinD
+    needs: [changes, pr-images]
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/_reusable-pr-e2e-kind.yaml
+    with:
+      image: ${{ needs.pr-images.outputs.image }}

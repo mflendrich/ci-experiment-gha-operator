@@ -1,0 +1,51 @@
+name: Post-Merge
+
+on:
+  push:
+    branches:
+      - master
+      - v1.19
+      - v1.20
+
+jobs:
+  # Derive the image tag from the branch name.
+  params:
+    name: Derive Parameters
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.derive.outputs.image_tag }}
+    steps:
+      - name: Derive image tag from branch
+        id: derive
+        run: |
+          branch="${GITHUB_REF_NAME}"
+          case "${branch}" in
+            master)
+              echo "image_tag=latest" >> "${GITHUB_OUTPUT}"
+              ;;
+            v*)
+              # Strip the 'v' prefix: v1.19 -> 1.19, v1.20 -> 1.20.
+              echo "image_tag=${branch#v}" >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "::error::Unexpected branch '${branch}'"
+              exit 1
+              ;;
+          esac
+
+  postmerge-images:
+    name: Images
+    needs: [params]
+    uses: ./.github/workflows/_reusable-postmerge-images.yaml
+    with:
+      image_tag: ${{ needs.params.outputs.image_tag }}
+    secrets:
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+  postmerge-helm:
+    name: Helm
+    needs: [params]
+    uses: ./.github/workflows/_reusable-postmerge-helm.yaml
+    with:
+      image_tag: ${{ needs.params.outputs.image_tag }}

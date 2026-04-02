@@ -1,0 +1,156 @@
+name: Reusable PR Checks
+
+on:
+  workflow_call: {}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make build
+
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make test-unit
+
+  test-binary:
+    name: Binary Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # test-binary verifies the git commit is embedded in the binary.
+          # A full checkout is not needed, but we need the exact commit, which
+          # actions/checkout provides by default (fetch-depth: 1 still checks
+          # out the merge commit with the correct SHA).
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make test-binary
+
+  test-envtest:
+    name: Envtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install ginkgo
+        run: go install ./vendor/github.com/onsi/ginkgo/v2/ginkgo
+      - run: make test-envtest
+
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # verify-codegen and other checks may need submodules or full history
+          # for diffing generated output. Shallow clone is sufficient since make
+          # verify regenerates and diffs against the working tree.
+          fetch-depth: 1
+          submodules: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install golangci-lint
+        run: |
+          # The .golangci.yaml uses version: "2", requiring golangci-lint v2.x.
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+      - run: make verify
+
+  verify-deps:
+    name: Verify Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make verify-deps
+
+  verify-commits:
+    name: Verify Commits
+    runs-on: ubuntu-latest
+    # Only runs on pull requests (needs a base ref to compare against).
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history to walk commits from base to HEAD.
+          fetch-depth: 0
+      - name: Verify commit messages
+        run: ./hack/.ci/verify-commits.sh "${{ github.event.pull_request.base.sha }}"
+
+  helm-build:
+    name: Helm Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+      - run: make helm-build
+
+  build-docs:
+    name: Build Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: ">=0.10.9,<0.11.0"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build docs
+        working-directory: docs
+        run: |
+          make setup
+          make dirhtml
+          make redirects
+
+  verify-docs:
+    name: Verify Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: ">=0.10.9,<0.11.0"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify docs
+        working-directory: docs
+        run: |
+          make setup
+          make verify
