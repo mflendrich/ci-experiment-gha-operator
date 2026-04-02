@@ -469,7 +469,7 @@ $(printf '    - "%s"\n' "${e2e_command_args[@]}")
     secret:
       secretName: worker-s3-credentials
 EOF
-  kubectl -n=e2e wait --for=condition=Ready pod/e2e
+  kubectl -n=e2e wait --timeout=300s --for=condition=Ready pod/e2e
 
   exit_code="$( wait-for-container-exit-with-logs e2e e2e e2e )"
 
