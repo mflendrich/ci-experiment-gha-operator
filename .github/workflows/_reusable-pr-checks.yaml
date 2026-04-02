@@ -62,10 +62,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # verify-codegen and other checks may need submodules or full history
-          # for diffing generated output. Shallow clone is sufficient since make
-          # verify regenerates and diffs against the working tree.
-          fetch-depth: 1
           submodules: true
       - uses: actions/setup-go@v5
         with:
@@ -77,6 +73,18 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
       - name: Install Helm
         uses: azure/setup-helm@v4
+      - name: Install operator-sdk
+        run: |
+          # verify-bundle requires a patched operator-sdk fork that supports
+          # aggregated ClusterRoles (not yet upstream).
+          # Ref: https://github.com/operator-framework/operator-sdk/pull/6978
+          tmp_dir="$(mktemp -d)"
+          git clone --depth=1 --branch support-aggregated-clusterroles \
+            https://github.com/zimnx/operator-sdk.git "${tmp_dir}/operator-sdk"
+          cd "${tmp_dir}/operator-sdk"
+          make build
+          sudo mv ./build/operator-sdk /usr/local/bin/operator-sdk
+          rm -rf "${tmp_dir}"
       - run: make verify
 
   verify-deps:
@@ -126,6 +134,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tags and full history are needed by the version_context_substitutions
+          # Sphinx extension (runs `git tag --list`) and sphinx-last-updated-by-git.
+          fetch-depth: 0
+          fetch-tags: true
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
@@ -146,6 +159,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tags are needed by the version_context_substitutions Sphinx extension.
+          fetch-depth: 0
+          fetch-tags: true
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
