@@ -12,8 +12,12 @@ jobs:
   e2e-kind:
     name: E2E KinD
     runs-on: ubuntu-latest
+    env:
+      KIND_CLUSTER_NAME: scylla-operator-e2e
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-go@v5
         with:
@@ -28,8 +32,31 @@ jobs:
           # Install the latest KinD release.
           go install sigs.k8s.io/kind@latest
 
-      - name: Run KinD E2E tests
+      - name: Install yq
+        run: |
+          go install github.com/mikefarah/yq/v4@latest
+
+      - name: Set up KinD cluster and deploy operator
         env:
           SO_IMAGE: ${{ inputs.image }}
         run: |
-          make test-e2e-kind
+          make kind-setup
+
+      - name: Mirror image to local KinD registry
+        run: |
+          set -euExo pipefail
+
+          # Pull the remote image and push it into the local KinD registry
+          # so that the e2e pod can start quickly (the upstream e2e script
+          # uses `kubectl wait` with a 30 s default timeout).
+          local_image="localhost:5001/scylladb/scylla-operator:e2e"
+          podman pull '${{ inputs.image }}'
+          podman tag  '${{ inputs.image }}' "${local_image}"
+          podman push --tls-verify=false "${local_image}"
+          echo "SO_IMAGE=${local_image}" >> "${GITHUB_ENV}"
+
+      - name: Run KinD E2E tests
+        env:
+          CLUSTER_NAME: ${{ env.KIND_CLUSTER_NAME }}
+        run: |
+          ./hack/kind/run-e2e-tests.sh

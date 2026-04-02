@@ -80,12 +80,20 @@ jobs:
           git_revision='${{ steps.meta.outputs.git_revision }}'
 
           # Rolling tag (e.g., scylla-operator-latest).
-          buildah manifest create \
-            --annotation "org.opencontainers.image.revision=${git_revision}" \
-            "${repo_ref}"
+          # NOTE: --annotation on `manifest create` is not supported on older
+          # buildah versions shipped with Ubuntu runners. We annotate each
+          # manifest entry individually after adding them instead.
+          buildah manifest create "${repo_ref}"
 
           buildah manifest add "${repo_ref}" '${{ steps.meta.outputs.image_amd64 }}'
           buildah manifest add "${repo_ref}" '${{ steps.meta.outputs.image_arm64 }}'
+
+          # Annotate each manifest entry with the git revision.
+          for digest in $( buildah manifest inspect "${repo_ref}" | jq -r '.manifests[].digest' ); do
+            buildah manifest annotate \
+              --annotation "org.opencontainers.image.revision=${git_revision}" \
+              "${repo_ref}" "${digest}"
+          done
 
           digestfile="$( mktemp )"
           buildah manifest push --all --digestfile="${digestfile}" "${repo_ref}" "docker://${repo_ref}"
