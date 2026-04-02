@@ -36,6 +36,19 @@ jobs:
         run: |
           go install github.com/mikefarah/yq/v4@latest
 
+      - name: Disable podman PID limit
+        run: |
+          # The e2e test runner spawns many parallel ginkgo shards (~60),
+          # each forking /usr/bin/scylla-operator-tests.  Podman's default
+          # pids_limit on KinD node containers is too low and causes EAGAIN.
+          # Prow fixes this the same way (pids_limit = 0 disables the limit).
+          #
+          # Use a drop-in config so it overrides any value in the base
+          # /etc/containers/containers.conf (which already has pids_limit
+          # on Ubuntu 24.04 runners).
+          sudo mkdir -p /etc/containers/containers.conf.d
+          printf '[containers]\npids_limit = 0\n' | sudo tee /etc/containers/containers.conf.d/99-no-pids-limit.conf
+
       - name: Set up KinD cluster and deploy operator
         env:
           SO_IMAGE: ${{ inputs.image }}
