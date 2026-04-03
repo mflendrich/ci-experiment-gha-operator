@@ -53,3 +53,72 @@ jobs:
     uses: ./.github/workflows/_reusable-pr-e2e-kind.yaml
     with:
       image: ${{ needs.pr-images.outputs.image }}
+
+  e2e-gke-parallel:
+    name: E2E GKE Parallel
+    needs: [changes, pr-images]
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/_reusable-pr-e2e-gke.yaml
+    with:
+      image: ${{ needs.pr-images.outputs.image }}
+      suite: scylla-operator/conformance/parallel
+      service-type: Headless
+      nodes-broadcast-type: PodIP
+      clients-broadcast-type: PodIP
+      job-suffix: parallel
+      create-storage-bucket: true
+    secrets:
+      MGMT_CLUSTER_KUBECONFIG: ${{ secrets.MGMT_CLUSTER_KUBECONFIG }}
+
+  e2e-gke-serial:
+    name: E2E GKE Serial
+    needs: [changes, pr-images]
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/_reusable-pr-e2e-gke.yaml
+    with:
+      image: ${{ needs.pr-images.outputs.image }}
+      suite: scylla-operator/conformance/serial
+      service-type: Headless
+      nodes-broadcast-type: PodIP
+      clients-broadcast-type: PodIP
+      job-suffix: serial
+      create-storage-bucket: false
+      disable-nodeconfig: true
+      storage-class-name: "REMOVE"
+      local-nvme-ssd-count: 0
+    secrets:
+      MGMT_CLUSTER_KUBECONFIG: ${{ secrets.MGMT_CLUSTER_KUBECONFIG }}
+
+  e2e-gke-parallel-clusterip:
+    name: E2E GKE ClusterIP
+    needs: [changes, pr-images]
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/_reusable-pr-e2e-gke.yaml
+    with:
+      image: ${{ needs.pr-images.outputs.image }}
+      suite: scylla-operator/conformance/parallel
+      service-type: ClusterIP
+      nodes-broadcast-type: ServiceClusterIP
+      clients-broadcast-type: ServiceClusterIP
+      job-suffix: clusterip
+      create-storage-bucket: true
+    secrets:
+      MGMT_CLUSTER_KUBECONFIG: ${{ secrets.MGMT_CLUSTER_KUBECONFIG }}
+
+  e2e-gke-parallel-ipv6:
+    name: E2E GKE IPv6
+    needs: [changes, pr-images]
+    if: contains(github.event.pull_request.labels.*.name, 'test-ipv6')
+    uses: ./.github/workflows/_reusable-pr-e2e-gke.yaml
+    with:
+      image: ${{ needs.pr-images.outputs.image }}
+      suite: scylla-operator/conformance/parallel-ipv6
+      service-type: Headless
+      nodes-broadcast-type: PodIP
+      clients-broadcast-type: PodIP
+      job-suffix: ipv6
+      create-storage-bucket: true
+      cluster-network: ci-dual-stack-network
+      cluster-stack-type: IPV4_IPV6
+    secrets:
+      MGMT_CLUSTER_KUBECONFIG: ${{ secrets.MGMT_CLUSTER_KUBECONFIG }}

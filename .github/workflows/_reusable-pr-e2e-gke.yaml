@@ -1,0 +1,314 @@
+name: Reusable PR E2E GKE
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Operator image reference to test.
+        type: string
+        required: true
+      suite:
+        description: "E2E test suite name (e.g. scylla-operator/conformance/parallel)."
+        type: string
+        required: true
+      service-type:
+        description: "ScyllaCluster node service type: Headless or ClusterIP."
+        type: string
+        required: true
+      nodes-broadcast-type:
+        description: "Nodes broadcast address type: PodIP or ServiceClusterIP."
+        type: string
+        required: true
+      clients-broadcast-type:
+        description: "Clients broadcast address type: PodIP or ServiceClusterIP."
+        type: string
+        required: true
+      job-suffix:
+        description: "Short identifier for resource naming (e.g. parallel, serial)."
+        type: string
+        required: true
+      create-storage-bucket:
+        description: Whether to create a GCS StorageBucket CR.
+        type: boolean
+        default: false
+      disable-nodeconfig:
+        description: "Set SO_DISABLE_NODECONFIG=true (disables NodeConfig + CSI driver)."
+        type: boolean
+        default: false
+      storage-class-name:
+        description: "Override for SO_SCYLLACLUSTER_STORAGECLASS_NAME. Empty = use script default. REMOVE = set to empty string."
+        type: string
+        default: ""
+      cluster-network:
+        description: "GKE network name. Empty = default VPC."
+        type: string
+        default: ""
+      cluster-stack-type:
+        description: "IP allocation stack type (e.g. IPV4_IPV6 for dual-stack). Empty = omit."
+        type: string
+        default: ""
+      local-nvme-ssd-count:
+        description: "Local NVMe SSD count for the scylladb node pool. 0 = omit localNVMeSSDBlockConfig."
+        type: number
+        default: 1
+      e2e-timeout:
+        description: Timeout passed to the E2E test runner via SO_E2E_TIMEOUT.
+        type: string
+        default: "60m"
+      run-timeout:
+        description: Overall GHA job timeout in minutes.
+        type: number
+        default: 120
+    secrets:
+      MGMT_CLUSTER_KUBECONFIG:
+        required: true
+
+env:
+  MGMT_KUBECONFIG: /tmp/mgmt-kubeconfig
+
+jobs:
+  e2e-gke:
+    name: E2E GKE (${{ inputs.job-suffix }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.run-timeout }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install yq
+        run: |
+          wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Write management kubeconfig
+        run: |
+          echo "${{ secrets.MGMT_CLUSTER_KUBECONFIG }}" > "${MGMT_KUBECONFIG}"
+          chmod 600 "${MGMT_KUBECONFIG}"
+
+      - name: Generate resource name
+        id: resource
+        run: |
+          NAME="${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.job-suffix }}"
+          echo "name=${NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create KubernetesCluster CR
+        env:
+          NAME: ${{ steps.resource.outputs.name }}
+        run: |
+          cat <<'OUTER' | envsubst '$NAME' | kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test create -f -
+          apiVersion: ci.scylladb.com/v1alpha1
+          kind: KubernetesCluster
+          metadata:
+            name: "${NAME}"
+          spec:
+            version: "1.33"
+            ttlSeconds: 14400
+            credentialsSecret:
+              name: "${NAME}-kubeconfig"
+            type: GKE
+            gke:
+              location: us-central1
+          OUTER
+
+          # Patch in optional fields using kubectl patch.
+
+          # Network (only for IPv6 job).
+          if [[ -n "${{ inputs.cluster-network }}" ]]; then
+            kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test patch kubernetescluster/"${NAME}" \
+              --type=merge -p '{"spec":{"gke":{"network":"${{ inputs.cluster-network }}"}}}'
+          fi
+
+          # IP allocation stack type (only for IPv6 job).
+          if [[ -n "${{ inputs.cluster-stack-type }}" ]]; then
+            kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test patch kubernetescluster/"${NAME}" \
+              --type=merge -p '{"spec":{"gke":{"ipAllocationPolicy":{"stackType":"${{ inputs.cluster-stack-type }}"}}}}'
+          fi
+
+      - name: Patch KubernetesCluster node pools
+        env:
+          NAME: ${{ steps.resource.outputs.name }}
+        run: |
+          # Build the node pools JSON.
+          # Workers pool (always present).
+          workers_pool='{
+            "name": "workers",
+            "locations": ["us-central1-a"],
+            "config": {
+              "machineType": "e2-standard-8",
+              "diskType": "pd-standard",
+              "diskSizeGB": 40,
+              "labels": {"pool": "workers"}
+            },
+            "initialNodeCount": 1
+          }'
+
+          # ScyllaDB pool.
+          scylladb_config='{
+            "machineType": "n2d-standard-8",
+            "diskType": "pd-balanced",
+            "diskSizeGB": 40,
+            "labels": {
+              "pool": "scylladb",
+              "scylla.scylladb.com/node-type": "scylla"
+            },
+            "taints": [{
+              "key": "scylla-operator.scylladb.com/dedicated",
+              "value": "scyllaclusters",
+              "effect": "NO_SCHEDULE"
+            }],
+            "kubeletConfig": {
+              "cpuManagerPolicy": "static"
+            }
+          }'
+
+          # Add localNVMeSSDBlockConfig if requested.
+          if [[ "${{ inputs.local-nvme-ssd-count }}" -gt 0 ]]; then
+            scylladb_config=$(echo "${scylladb_config}" | jq --argjson count "${{ inputs.local-nvme-ssd-count }}" \
+              '. + {"localNVMeSSDBlockConfig": {"localSSDCount": $count}}')
+          fi
+
+          scylladb_pool=$(jq -n \
+            --argjson config "${scylladb_config}" \
+            '{
+              "name": "scylladb",
+              "locations": ["us-central1-a"],
+              "config": $config,
+              "initialNodeCount": 1
+            }')
+
+          node_pools=$(jq -n \
+            --argjson w "${workers_pool}" \
+            --argjson s "${scylladb_pool}" \
+            '[$w, $s]')
+
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test patch kubernetescluster/"${NAME}" \
+            --type=merge -p "$(jq -n --argjson np "${node_pools}" '{"spec":{"gke":{"nodePools":$np}}}')"
+
+      - name: Wait for cluster bootstrap
+        env:
+          NAME: ${{ steps.resource.outputs.name }}
+        run: |
+          echo "Waiting for KubernetesCluster/${NAME} to be bootstrapped..."
+          timeout 20m bash -c '
+            until kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+              wait --for=condition=ClusterBootstrapped=True kubernetescluster/"${NAME}" --timeout=60s 2>/dev/null; do
+              echo "Still waiting for ClusterBootstrapped..."
+              sleep 10
+            done
+          '
+          echo "Cluster bootstrapped. Checking conditions..."
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+            wait --for=condition=Degraded=False kubernetescluster/"${NAME}" --timeout=5m
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+            wait --for=condition=Progressing=False kubernetescluster/"${NAME}" --timeout=5m
+          echo "Cluster is ready."
+
+      - name: Create StorageBucket
+        if: inputs.create-storage-bucket
+        env:
+          NAME: ${{ steps.resource.outputs.name }}
+        run: |
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test create -f - <<EOF
+          apiVersion: ci.scylladb.com/v1alpha1
+          kind: StorageBucket
+          metadata:
+            name: "${NAME}"
+          spec:
+            ttlSeconds: 14400
+            type: GCS
+            gcs:
+              location: us-central1
+            credentialsSecret:
+              name: "${NAME}-gcs-service-account"
+          EOF
+
+      - name: Wait for StorageBucket and extract credentials
+        if: inputs.create-storage-bucket
+        env:
+          NAME: ${{ steps.resource.outputs.name }}
+        run: |
+          echo "Waiting for StorageBucket/${NAME}..."
+          timeout 5m bash -c '
+            until kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+              wait --for=condition=Degraded=False storagebucket/"${NAME}" --timeout=60s 2>/dev/null \
+              && kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+              wait --for=condition=Progressing=False storagebucket/"${NAME}" --timeout=60s 2>/dev/null; do
+              sleep 5
+            done
+          '
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+            get storagebuckets/"${NAME}" --template='{{ .status.bucketName }}' > /tmp/gcs-bucket-name
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+            get secret/"${NAME}-gcs-service-account" --template='{{ index .data "gcs-service-account.json" }}' \
+            | base64 -d > /tmp/gcs-service-account.json
+          echo "StorageBucket ready. Bucket name: $(cat /tmp/gcs-bucket-name)"
+
+      - name: Extract GKE cluster kubeconfig
+        env:
+          NAME: ${{ steps.resource.outputs.name }}
+        run: |
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+            get secret/"${NAME}-kubeconfig" --template='{{ .data.kubeconfig }}' \
+            | base64 -d > /tmp/gke-kubeconfig
+          chmod 600 /tmp/gke-kubeconfig
+
+          # Set a non-existing default namespace to avoid accidental operations in the default namespace.
+          kubectl --kubeconfig=/tmp/gke-kubeconfig config set-context --current \
+            --namespace 'default-unexisting-namespace'
+
+          # Sanity check.
+          kubectl --kubeconfig=/tmp/gke-kubeconfig version -o yaml
+          kubectl --kubeconfig=/tmp/gke-kubeconfig cluster-info
+
+      - name: Run E2E tests
+        env:
+          KUBECONFIG: /tmp/gke-kubeconfig
+          ARTIFACTS: ${{ runner.temp }}/artifacts
+          SO_SUITE: ${{ inputs.suite }}
+          SO_IMAGE: ${{ inputs.image }}
+          SO_SCYLLACLUSTER_NODE_SERVICE_TYPE: ${{ inputs.service-type }}
+          SO_SCYLLACLUSTER_NODES_BROADCAST_ADDRESS_TYPE: ${{ inputs.nodes-broadcast-type }}
+          SO_SCYLLACLUSTER_CLIENTS_BROADCAST_ADDRESS_TYPE: ${{ inputs.clients-broadcast-type }}
+          SO_E2E_TIMEOUT: ${{ inputs.e2e-timeout }}
+        run: |
+          if [[ "${{ inputs.disable-nodeconfig }}" == "true" ]]; then
+            export SO_DISABLE_NODECONFIG=true
+          fi
+
+          if [[ "${{ inputs.storage-class-name }}" == "REMOVE" ]]; then
+            export SO_SCYLLACLUSTER_STORAGECLASS_NAME=""
+          elif [[ -n "${{ inputs.storage-class-name }}" ]]; then
+            export SO_SCYLLACLUSTER_STORAGECLASS_NAME="${{ inputs.storage-class-name }}"
+          fi
+
+          if [[ "${{ inputs.create-storage-bucket }}" == "true" ]]; then
+            export SO_BUCKET_NAME="$( cat /tmp/gcs-bucket-name )"
+            export SO_GCS_SERVICE_ACCOUNT_CREDENTIALS_PATH=/tmp/gcs-service-account.json
+          fi
+
+          mkdir -p "${ARTIFACTS}"
+          timeout --verbose --signal INT --kill-after=100m 90m ./hack/.ci/run-e2e-gke.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-gke-${{ inputs.job-suffix }}-artifacts
+          path: ${{ runner.temp }}/artifacts
+          if-no-files-found: ignore
+
+      - name: Cleanup
+        if: always()
+        env:
+          NAME: ${{ steps.resource.outputs.name }}
+        run: |
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+            delete --wait=false --ignore-not-found kubernetescluster/"${NAME}" || true
+          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test \
+            delete --wait=false --ignore-not-found storagebuckets/"${NAME}" || true
+          rm -f "${MGMT_KUBECONFIG}" /tmp/gke-kubeconfig /tmp/gcs-bucket-name /tmp/gcs-service-account.json
