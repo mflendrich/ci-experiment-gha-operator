@@ -5,9 +5,6 @@ shopt -s inherit_errexit
 
 readonly repo_root="$( dirname "${BASH_SOURCE[0]}" )/../.."
 
-# Ensure all kind calls use podman.
-export KIND_EXPERIMENTAL_PROVIDER=podman
-
 if [ -z "${CLUSTER_NAME}" ]; then
   echo "CLUSTER_NAME must be set" > /dev/stderr
   exit 1
