@@ -11,7 +11,7 @@ on:
 jobs:
   e2e-kind:
     name: E2E KinD
-    runs-on: ubuntu-latest
+    runs-on: gke-kind-e2e
     env:
       KIND_CLUSTER_NAME: scylla-operator-e2e
     steps:
@@ -36,37 +36,11 @@ jobs:
         run: |
           go install github.com/mikefarah/yq/v4@latest
 
-      - name: Disable podman PID limit
-        run: |
-          # The e2e test runner spawns many parallel ginkgo shards (~60),
-          # each forking /usr/bin/scylla-operator-tests.  Podman's default
-          # pids_limit on KinD node containers is too low and causes EAGAIN.
-          # Prow fixes this the same way (pids_limit = 0 disables the limit).
-          #
-          # Use a drop-in config so it overrides any value in the base
-          # /etc/containers/containers.conf (which already has pids_limit
-          # on Ubuntu 24.04 runners).
-          sudo mkdir -p /etc/containers/containers.conf.d
-          printf '[containers]\npids_limit = 0\n' | sudo tee /etc/containers/containers.conf.d/99-no-pids-limit.conf
-
       - name: Set up KinD cluster and deploy operator
         env:
           SO_IMAGE: ${{ inputs.image }}
         run: |
           make kind-setup
-
-      - name: Mirror image to local KinD registry
-        run: |
-          set -euExo pipefail
-
-          # Pull the remote image and push it into the local KinD registry
-          # so that the e2e pod can start quickly (the upstream e2e script
-          # uses `kubectl wait` with a 30 s default timeout).
-          local_image="localhost:5001/scylladb/scylla-operator:e2e"
-          podman pull '${{ inputs.image }}'
-          podman tag  '${{ inputs.image }}' "${local_image}"
-          podman push --tls-verify=false "${local_image}"
-          echo "SO_IMAGE=${local_image}" >> "${GITHUB_ENV}"
 
       - name: Run KinD E2E tests
         env:

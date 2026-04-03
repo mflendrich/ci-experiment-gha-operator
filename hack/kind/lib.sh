@@ -22,11 +22,11 @@ function build-and-push-operator-image {
     export SO_IMAGE
 
     echo "Building operator image: ${SO_IMAGE}"
-    podman build --format docker -t "${SO_IMAGE}" -f "${root_dir}/Dockerfile" "${root_dir}"
+    docker build -t "${SO_IMAGE}" -f "${root_dir}/Dockerfile" "${root_dir}"
 
-    # Push the image to the local registry. Use --tls-verify=false as we're running local registry without TLS.
+    # Push the image to the local registry.
     echo "Pushing operator image to local registry: ${SO_IMAGE}"
-    podman push --tls-verify=false "${SO_IMAGE}"
+    docker push "${SO_IMAGE}"
   else
     echo "Using existing operator image: ${SO_IMAGE}"
   fi
