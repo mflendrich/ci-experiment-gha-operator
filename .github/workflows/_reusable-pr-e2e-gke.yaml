@@ -286,6 +286,20 @@ jobs:
           mkdir -p "${ARTIFACTS}"
           timeout --verbose --signal INT --kill-after=100m 90m ./hack/.ci/run-e2e-gke.sh
 
+      - name: Sanitize artifact filenames
+        if: always()
+        run: |
+          # actions/upload-artifact rejects files with colons and other special
+          # characters. Kubernetes resource names may contain colons (e.g.
+          # cert-manager-controller-approve:cert-manager-io), so we rename them.
+          if [[ -d "${{ runner.temp }}/artifacts" ]]; then
+            find "${{ runner.temp }}/artifacts" -depth -name '*:*' | while IFS= read -r path; do
+              dir=$(dirname "${path}")
+              base=$(basename "${path}")
+              mv "${path}" "${dir}/${base//:/_}"
+            done
+          fi
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
