@@ -99,55 +99,11 @@ jobs:
       - name: Create KubernetesCluster CR
         env:
           NAME: ${{ steps.resource.outputs.name }}
+          CLUSTER_NETWORK: ${{ inputs.cluster-network }}
+          CLUSTER_STACK_TYPE: ${{ inputs.cluster-stack-type }}
+          LOCAL_NVME_SSD_COUNT: ${{ inputs.local-nvme-ssd-count }}
         run: |
-          cat <<'OUTER' | envsubst '$NAME' | kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test create -f -
-          apiVersion: ci.scylladb.com/v1alpha1
-          kind: KubernetesCluster
-          metadata:
-            name: "${NAME}"
-          spec:
-            version: "1.33"
-            ttlSeconds: 14400
-            credentialsSecret:
-              name: "${NAME}-kubeconfig"
-            type: GKE
-            gke:
-              location: us-central1
-          OUTER
-
-          # Patch in optional fields using kubectl patch.
-
-          # Network (only for IPv6 job).
-          if [[ -n "${{ inputs.cluster-network }}" ]]; then
-            kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test patch kubernetescluster/"${NAME}" \
-              --type=merge -p '{"spec":{"gke":{"network":"${{ inputs.cluster-network }}"}}}'
-          fi
-
-          # IP allocation stack type (only for IPv6 job).
-          if [[ -n "${{ inputs.cluster-stack-type }}" ]]; then
-            kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test patch kubernetescluster/"${NAME}" \
-              --type=merge -p '{"spec":{"gke":{"ipAllocationPolicy":{"stackType":"${{ inputs.cluster-stack-type }}"}}}}'
-          fi
-
-      - name: Patch KubernetesCluster node pools
-        env:
-          NAME: ${{ steps.resource.outputs.name }}
-        run: |
-          # Build the node pools JSON.
-          # Workers pool (always present).
-          workers_pool='{
-            "name": "workers",
-            "locations": ["us-central1-a"],
-            "config": {
-              "machineType": "e2-standard-8",
-              "diskType": "pd-standard",
-              "diskSizeGB": 40,
-              "labels": {"pool": "workers"}
-            },
-            "initialNodeCount": 1
-          }'
-
-          # ScyllaDB pool.
+          # Build the scylladb node pool config.
           scylladb_config='{
             "machineType": "n2d-standard-8",
             "diskType": "pd-balanced",
@@ -166,28 +122,64 @@ jobs:
             }
           }'
 
-          # Add localNVMeSSDBlockConfig if requested.
-          if [[ "${{ inputs.local-nvme-ssd-count }}" -gt 0 ]]; then
-            scylladb_config=$(echo "${scylladb_config}" | jq --argjson count "${{ inputs.local-nvme-ssd-count }}" \
+          if [[ "${LOCAL_NVME_SSD_COUNT}" -gt 0 ]]; then
+            scylladb_config=$(echo "${scylladb_config}" | jq --argjson count "${LOCAL_NVME_SSD_COUNT}" \
               '. + {"localNVMeSSDBlockConfig": {"localSSDCount": $count}}')
           fi
 
-          scylladb_pool=$(jq -n \
-            --argjson config "${scylladb_config}" \
+          # Build the full CR as JSON.
+          cr=$(jq -n \
+            --arg name "${NAME}" \
+            --argjson scylladb_config "${scylladb_config}" \
             '{
-              "name": "scylladb",
-              "locations": ["us-central1-a"],
-              "config": $config,
-              "initialNodeCount": 1
+              "apiVersion": "ci.scylladb.com/v1alpha1",
+              "kind": "KubernetesCluster",
+              "metadata": {
+                "name": $name
+              },
+              "spec": {
+                "version": "1.33",
+                "ttlSeconds": 14400,
+                "credentialsSecret": {
+                  "name": ($name + "-kubeconfig")
+                },
+                "type": "GKE",
+                "gke": {
+                  "location": "us-central1",
+                  "nodePools": [
+                    {
+                      "name": "workers",
+                      "locations": ["us-central1-a"],
+                      "config": {
+                        "machineType": "e2-standard-8",
+                        "diskType": "pd-standard",
+                        "diskSizeGB": 40,
+                        "labels": {"pool": "workers"}
+                      },
+                      "initialNodeCount": 1
+                    },
+                    {
+                      "name": "scylladb",
+                      "locations": ["us-central1-a"],
+                      "config": $scylladb_config,
+                      "initialNodeCount": 1
+                    }
+                  ]
+                }
+              }
             }')
 
-          node_pools=$(jq -n \
-            --argjson w "${workers_pool}" \
-            --argjson s "${scylladb_pool}" \
-            '[$w, $s]')
+          # Add optional network field.
+          if [[ -n "${CLUSTER_NETWORK}" ]]; then
+            cr=$(echo "${cr}" | jq --arg net "${CLUSTER_NETWORK}" '.spec.gke.network = $net')
+          fi
 
-          kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test patch kubernetescluster/"${NAME}" \
-            --type=merge -p "$(jq -n --argjson np "${node_pools}" '{"spec":{"gke":{"nodePools":$np}}}')"
+          # Add optional IP allocation stack type.
+          if [[ -n "${CLUSTER_STACK_TYPE}" ]]; then
+            cr=$(echo "${cr}" | jq --arg st "${CLUSTER_STACK_TYPE}" '.spec.gke.ipAllocationPolicy.stackType = $st')
+          fi
+
+          echo "${cr}" | kubectl --kubeconfig="${MGMT_KUBECONFIG}" -n mflendrich-test create -f -
 
       - name: Wait for cluster bootstrap
         env:
