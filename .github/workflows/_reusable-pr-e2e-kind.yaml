@@ -39,8 +39,9 @@ jobs:
       - name: Set up KinD cluster and deploy operator
         env:
           SO_IMAGE: ${{ inputs.image }}
+          CLUSTER_NAME: ${{ env.KIND_CLUSTER_NAME }}
         run: |
-          make kind-setup
+          ./hack/kind/cluster-setup.sh
 
       - name: Run KinD E2E tests
         env:
