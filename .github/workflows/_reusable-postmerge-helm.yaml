@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     container: quay.io/scylladb/scylla-operator-images:golang-1.26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Tags are needed for `git describe` used by the Makefile to derive
           # HELM_CHART_VERSION.
