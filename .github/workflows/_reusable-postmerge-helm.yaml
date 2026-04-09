@@ -31,7 +31,7 @@ jobs:
           make helm-build HELM_APP_VERSION='${{ inputs.image_tag }}'
 
       - name: Upload Helm charts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helm-charts-${{ inputs.image_tag }}
           path: helm/build/
